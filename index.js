@@ -1,87 +1,74 @@
 const express = require('express');
-const puppeteer = require('puppeteer');
+const axios = require('axios');
+const cheerio = require('cheerio');
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.get('/partidos-marca', async (req, res) => {
-    console.log("Consultando resultados en Marca...");
-    let browser;
-    
     try {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox'] 
-        });
-        const page = await browser.newPage();
-        await page.goto('https://www.marca.com/programacion-tv.html', { waitUntil: 'networkidle2' });
+        const { data } = await axios.get('https://www.marca.com/programacion-tv.html');
+        const $ = cheerio.load(data);
+        const listaPartidos = [];
 
-        const partidos = await page.evaluate(() => {
-            const lista = [];
-            const bloques = document.querySelectorAll('.ev-comp-game');
+        $('.ev-comp-game').each((i, elemento) => {
+            const local = $(elemento).find('.ev-team-name.local').text().trim();
+            const visitante = $(elemento).find('.ev-team-name.visitant').text().trim();
+            const marcador = $(elemento).find('.ev-game-result').text().trim();
+            const estado = $(elemento).find('.ev-game-status').text().trim();
+            const enlace = $(elemento).find('a').attr('href');
 
-            bloques.forEach(bloque => {
-                const local = bloque.querySelector('.ev-team-name.local')?.innerText.trim();
-                const visitante = bloque.querySelector('.ev-team-name.visitant')?.innerText.trim();
-                const marcador = bloque.querySelector('.ev-game-result')?.innerText.trim();
-                const estado = bloque.querySelector('.ev-game-status')?.innerText.trim();
-                // CAPTURAMOS LA URL AQUÍ
-                const url = bloque.querySelector('a')?.href;
-
-                if (local && visitante) {
-                    lista.push({ local, visitante, marcador: marcador || "vs", estado, url });
-                }
-            });
-            return lista;
+            if (local && visitante) {
+                listaPartidos.push({
+                    local,
+                    visitante,
+                    marcador: marcador || "vs",
+                    estado: estado || "Programado",
+                    url: enlace
+                });
+            }
         });
 
-        await browser.close();
-        res.json({ status: "success", resultados: partidos });
+        res.json({ status: "success", resultados: listaPartidos });
 
-    } catch (e) {
-        if (browser) await browser.close();
-        console.error(e);
-        res.status(500).json({ status: "error", mensaje: e.message });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ status: "error", mensaje: "Error al leer Marca" });
     }
 });
 
+// Endpoint recuperado para detalles del partido (Adaptado a Cheerio)
 app.get('/detalle', async (req, res) => {
     const urlPartido = req.query.url;
     if (!urlPartido) return res.status(400).send("Falta la URL");
 
-    let browser;
     try {
-        browser = await puppeteer.launch({
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        const page = await browser.newPage();
-        await page.goto(urlPartido, { waitUntil: 'networkidle2' });
+        const { data } = await axios.get(urlPartido);
+        const $ = cheerio.load(data);
+        const eventos = [];
 
-        const detalles = await page.evaluate(() => {
-            const eventos = [];
-            // Selectores actualizados para detalle
-            const items = document.querySelectorAll('.ue-c-match-event');
+        // Selectores de Marca para eventos (goles, tarjetas, etc)
+        $('.ue-c-match-event').each((i, item) => {
+            const minuto = $(item).find('.ue-c-match-event__time').text().trim();
+            const texto = $(item).find('.ue-c-match-event__text').text().trim();
+            // Intentamos capturar el tipo de evento basado en el icono SVG
+            const tipo = $(item).find('svg').attr('class') || 'evento';
 
-            items.forEach(item => {
-                const minuto = item.querySelector('.ue-c-match-event__time')?.innerText;
-                const texto = item.querySelector('.ue-c-match-event__text')?.innerText;
-                const tipo = item.querySelector('svg')?.getAttribute('class') || 'evento';
-
-                if (texto) {
-                    eventos.push({ minuto, texto, tipo });
-                }
-            });
-            return eventos;
+            if (texto) {
+                eventos.push({ minuto, texto, tipo });
+            }
         });
 
-        await browser.close();
-        res.json({ status: "success", eventos: detalles });
+        res.json({ status: "success", eventos });
     } catch (e) {
-        if (browser) await browser.close();
+        console.error(e);
         res.status(500).json({ error: e.message });
     }
 });
 
+app.get('/', (req, res) => {
+    res.send('API de Fútbol Funcionando');
+});
+
 app.listen(PORT, () => {
-    console.log(`Servidor escuchando en http://localhost:${PORT}/partidos-marca`);
+    console.log(`Servidor en puerto ${PORT}`);
 });
